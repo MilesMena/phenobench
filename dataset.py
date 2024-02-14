@@ -42,29 +42,17 @@ def get_batch_idx(train_data, batch_size = 16):
         bathes_idx.append(random_idx)
     batches_idx = np.array(bathes_idx)
     return batches_idx
+
+def custom_collate(batch):
+        # Extract images and labels from the batch
+        images = np.array([item['image'] for item in batch])
+        masks = torch.tensor(np.array([item['semantics'] for item in batch]))
+        
+        # Return batched images and labels
+        return {'images': images, 'masks': masks}
     
 
-def test():
-    # load the training data with the phenobench dataloader
-    train_data = PhenoBench("data\PhenoBench",split = "train", target_types=["semantics"])
 
-    batch_idx = get_batch_idx(train_data, batch_size=16)
-
-    batch_images, batch_mask = [], []
-    for idx in batch_idx[0]:
-        batch_images.append(np.array(train_data[idx]['image']) )
-        batch_mask.append(train_data[idx]['semantics'])
-    batch_images, batch_mask = np.array(batch_images), np.array(batch_mask)
-    # the shape is (batch_size, 1024, 1024, 3)
-    # we will have to watch this becuase I am not sure how we will handle that
-    print(batch_images.shape)
-    print(np.array(train_data[0]['image']).shape)
-    # this is the shape of the previous model I built
-    # x = torch.randn((3,1,160,160 ))
-    #print(x, x.shape)
-    
-if __name__ == "__main__":
-    test()
 
 
 

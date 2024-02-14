@@ -32,7 +32,7 @@ class UNET(nn.Module):
         
         for feature in reversed(features):
             self.ups.append(
-                nn.ConvTranspose2d(feature * 2, feature, kernel_size = 2)
+                nn.ConvTranspose2d(feature * 2, feature, kernel_size = 2, stride = 2)
             )
 
             self.ups.append(DoubleConv(feature * 2, feature))
@@ -46,8 +46,22 @@ class UNET(nn.Module):
 
         for down in self.downs:
             x = down(x)
-        
-        return x
+            skip_connections.append(x)
+            x = self.pool(x)
+
+        x = self.bottleneck(x)
+        skip_connections = skip_connections[::-1] 
+
+        for idx in range(0, len(self.ups),2):
+            x = self.ups[idx](x)
+            skip_connection = skip_connections[idx//2]
+            if x.shape != skip_connection.shape:
+                x = TF.resize(x, size = skip_connection.shape[2:])
+
+            concat_skip = torch.cat((skip_connection, x), dim = 1)
+            x = self.ups[idx + 1](concat_skip)
+
+        return self.final_conv(x)
 
 
 
