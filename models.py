@@ -40,6 +40,7 @@ class UNET(nn.Module):
         self.bottleneck = DoubleConv(features[-1], features[-1] * 2)
 
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size = 1)
+        self.softmax = nn.Softmax(dim = 1 )
 
     def forward(self, x):
         skip_connections = []
@@ -61,7 +62,13 @@ class UNET(nn.Module):
             concat_skip = torch.cat((skip_connection, x), dim = 1)
             x = self.ups[idx + 1](concat_skip)
 
-        return self.final_conv(x)
+        
+        return self.final_conv(x) # we need raw logits to calculate a proper loss
+    
+    def predict(self, x):
+        x = self.forward(x)
+        return self.softmax(x)
+
 
 
 
