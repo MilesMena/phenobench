@@ -17,187 +17,178 @@ import torch.optim as optim
 import matplotlib.pyplot as plt
 from itertools import islice
 
-def test():
-    # C:\Users\menam\projects\phenobench\pheno_env\Scripts\activate
-    # https://pytorch.org/get-started/locally/
-    # is cuda avilable
-    resize = 128
-    batch_size = 16 # USE AS MUCH OF THE GPU AS POSSIBLE
-    forward_all = True
-    epochs = 4
-    LR = .001
-    plot_batch_loss = True # find a better way to plot the batch loss
-    write_outcome = False
-    w1,w2,w3 = .01, .2, .79
 
-    transform = A.Compose([
-                #A.LongestMaxSize(max_size=256),
-                
-                A.Resize(height = resize, width = resize)  # Resize the image to height 256 and width 256. OG: 1024, 1024
-                #A.Normalize(),  # Normalize pixel values
-                  # Convert the image to a PyTorch tensor
-                ]) 
+
+
+# TODO: save checkoutpoint function
     
+# TODO: Plotting Function(s)
+
+# TODO: 
+
+def main():
+    # Activate my python environment for this task:                       C:\Users\menam\projects\phenobench\pheno_env\Scripts\activate
+    # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
+
+    ############## Hyperparameters #################
+    RESIZE = 128
+    BATCH_SIZE = 4 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
+    EPOCHS = 4
+    LR = .001
+    
+    
+    # use GPU
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(DEVICE)
     # Set the random seed for CPU operations
     torch.manual_seed(42)
-
     # Set the random seed for CUDA operations (if available)
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(42)
 
+    LOSS_WEIGHT = torch.ones(3).to(DEVICE) # 3 is the number of classes for this task
+    # calculate weights by processing dataset histogram balancing by class 
+    LOSS_WEIGHT[0], LOSS_WEIGHT[1], LOSS_WEIGHT[2] = .5,2,10                                 # CLASS LABELS: {0:soil, 1:crop, 2: weed}
+
+    ############# Init the Phenobench DataLoader #################
+    # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
+    # ex: train_data[image_index]['image']
+    train_data = PhenoBench(r"data\PhenoBench", split = "train", target_types=["semantics"])
+    val_data = PhenoBench(r"data\PhenoBench", split = "val", target_types=["semantics"])
+
+    ################ Data Augmentation ################
+    # We resize so that our GPU's can handle the number of parameters 
+    # TODO: look into applying more augmentations other than resize
+    transform = A.Compose([
+                A.Resize(height = RESIZE, width = RESIZE)  # original images size:  (1024, 1024)
+                ]) 
+    
+    
+    ################# PyTorch DataLoader ##################
+    # Does this load ALL of the training images into memory, or only those collected for the batch that is currently training
     def custom_collate(batch):
-        
-        
-        # Extract images and labels from the batch
-        #images = np.array([item['image'] for item in batch])
-        #masks = np.array([item['semantics'] for item in batch])
-        # images , masks = [] , []
-        # for item in batch:
-            
-        #     transformed = transform(images = np.array(item['image']), masks = np.array(item['semantics']))
-        #     images.append(transformed['images'])
-        #     batch.append(transformed['masks'])
+        # Collate customizes how individual samples are grouped together https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
+        # The phenobench library provides an efficient way to load data, but it doesn't batch the images
+        # So we write a custom collation function to neatly pass the data to DataLoader, and we transform the data with albumentations here because
+        # it helps save memory loading in a rezied image.
+        # This function could possibly go outside main(), but that changes the relationship to the function transform. Look into this
         transformed = [transform(image=np.array(item['image']), mask = np.array(item['semantics'])) for item in batch]
         images = [item['image'] for item in transformed]
         masks = [item['mask'] for item in transformed]
 
         
         return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
-        #return {'images': images, 'masks': masks}
-    
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(DEVICE)
-   
 
-    # phenobenchs dataloader. It sits on the directroy and only loads when .__getitem__ is called
-    train_data = PhenoBench(r"data\PhenoBench", split = "train", target_types=["semantics"])
-    val_data = PhenoBench(r"data\PhenoBench", split = "val", target_types=["semantics"])
+    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate, drop_last = True)
+    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate, drop_last = True)
 
-    # Create a DataLoader with batching and shuffling
-    
-    
-    #print(f'Iterating through {len(train_data)} images with batch size {batch_size}: {len(train_data)//batch_size}')
 
-    train_loader = DataLoader(train_data, batch_size=batch_size, shuffle=True, collate_fn=custom_collate, drop_last = True)
-    val_loader = DataLoader(val_data, batch_size=batch_size, shuffle=True, collate_fn=custom_collate, drop_last = True)
-
+    ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
     model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
     
     # Creates a GradScaler once at the beginning of training.
-    scaler = GradScaler() # automated mixed precision. Dynamically scale  between float16 and float32 stability and computation increases
-    # loss_func https://stackoverflow.com/questions/48260415/pytorch-how-to-compute-iou-jaccard-index-for-semantic-segmentation
-    # {0:soil, 1:crop, 2: weed}
-    #loss_func = JaccardIndex(task="multiclass", num_classes=3).to(DEVICE) 
-    # between 0 an 1. 1 is perfect score
-    eval_func = MulticlassJaccardIndex(num_classes=3, average=None).to(DEVICE)
+    scaler = GradScaler() # automated mixed precision. Dynamically scale between float16 and float32 stability and computation increases during back prop
     
-    loss_func = nn.CrossEntropyLoss(weight = torch.tensor([w1,w2,w3]).to(DEVICE)) # will more epochs help or will more skewed weights help
+    eval_func = MulticlassJaccardIndex(num_classes=3, average=None).to(DEVICE) # https://stackoverflow.com/questions/48260415/pytorch-how-to-compute-iou-jaccard-index-for-semantic-segmentation
+    
+    loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
+    
     # Define the Adam optimizer
-    optimizer = optim.Adam(model.parameters(), lr=0.001)
+    optimizer = optim.Adam(model.parameters(), lr = LR)
 
-    fig1, ax1 = plt.subplots()
-    if forward_all:
-        epoch_evals = []
-        epoch_loss = []
 
-        for i in range(epochs):
-            batch_loss = []
-            for batch in tqdm( train_loader): # use islice(val_loader, 10) if writieing new code to test for bugs
-                # context manager. AMP. 
-                with autocast(): 
-                    loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
-                    loss = loss.requires_grad_()
-                    batch_loss.append(loss)
-                # Backward pass and optimization
-                optimizer.zero_grad()  # Zero the gradients
-                loss.backward()  # Compute gradients
-                optimizer.step()  # Update parameters
-            print(f'Epoch {i} mean loss: {torch.mean(torch.stack(batch_loss))}')
-            # convert batch loss into np array on the CPU
-            batch_loss = torch.stack(batch_loss).detach().cpu().numpy()
-            epoch_loss.append(batch_loss)
+    ############### Train the Model ###############
+    eval_loss = []
+    epoch_evals = []
+    epoch_loss = []
 
-            if plot_batch_loss:
-                ax1.plot(batch_loss, label = f'Epoch {i}')
-                
-            # evaluate on validation data
-            multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE)
-            batch_evals = []
-            #print(f'Iterating through {len(val_data)} images with batch size {batch_size}: {len(val_data)//batch_size}')
-            for batch in tqdm(val_loader): # use islice(val_loader, 10) if writieing new code to test for bugs
-                
-                with autocast(): # context manager. AMP. 
-                    pred = model.predict(batch['images'].to(DEVICE))
-                    batch_evals.append(multi_jaccard(pred, batch['masks'].float().to(DEVICE)))
-            mean_epoch_evals = torch.mean(torch.stack(batch_evals, dim= 1),dim = 1)
-            print(mean_epoch_evals)
-            epoch_evals.append(mean_epoch_evals)
-
-         # Add title and axis labels
-        if plot_batch_loss:
-            ax1.set_title('Batch Losses CE weight = (%s,%s,%s)'%(w1,w2,w3))
-            ax1.set_xlabel('Batch Index')
-            ax1.set_ylabel('Loss')
-            ax1.legend()
-            fig1.savefig("images/single_batch_losses_weight(%s,%s,%s).png"%(w1,w2,w3))
-    
-        #print(epoch_evals)
-        #epoch_loss = epoch_loss.detach().cpu().numpy()
-        #print(epoch_loss)
-        fig2, ax2 = plt.subplots()
-        epoch_loss_flat = [loss for epoch_list in epoch_loss for loss in epoch_list]
-        ax2.plot(epoch_loss_flat)
-        #ax2.plot(epoch_loss[1], label = 'Epoch 1')
-        # Add title and axis labels
-        ax2.set_title('Batch Losses CE weight = (%s,%s,%s)'%(w1,w2,w3))
-        ax2.set_xlabel('Batch Index')
-        ax2.set_ylabel('Loss')
-        #ax2.legend()
-        fig2.savefig("images/epochs_batch_losses_weight(%s,%s,%s).png"%(w1,w2,w3))
-
-        #print(eval_loss)
-        # I'd like to plot the evaluation loss for each epochand the training loss for each epoch
-        epoch_evals = np.array([[tensor.detach().cpu().numpy() for tensor in eval_list] for eval_list in epoch_evals])
+    for i in range(EPOCHS):
+        batch_loss = []
+        for batch in tqdm(train_loader): # use islice(train_loader, 10) if writieing new code to test for bugs
         
-        fig3, ax3 = plt.subplots()
-        # iterate over the second axis
-        for i in range(epoch_evals.shape[1]):
+            ############ Computer Loss for each Batch ###########
+            with autocast(): # context manager. AMP. Uses float16 and float32 when appropriate to decrease computations expense 
+                loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
+                loss = loss.requires_grad_()
+                batch_loss.append(loss)
+            ############ Backpropagate the Loss ##############
+            optimizer.zero_grad()  # Zero the gradients, so we only back prop this batch not this batch and all of the batches before it
+            loss.backward()  # Compute gradients
+            optimizer.step()  # Update parameters
 
-            ax3.plot(epoch_evals[:,i], label = 'JaccardIndex')
-        ax3.plot(np.mean(np.array(epoch_loss), axis = 1), label = 'Loss')
-        #plt.show(fig3)
-        ax3.set_title('validation and loss by epoch weight(%s,%s,%s)'%(w1,w2,w3))
-        ax3.set_xlabel('Epoch Index')
-        ax3.set_ylabel('Loss and JaccardIndex')
-        ax3.legend()
-        fig3.savefig("images/eval_loss_by_epoch_weight(%s,%s,%s).png"%(w1,w2,w3))
-        
-            #hours, minutes, seconds = int(time_diff // 3600), int(time_diff // 60), int(time_diff % 60)
+        print(f'Epoch {i} mean loss: {torch.mean(torch.stack(batch_loss))}')
+
+
+        # convert batch loss into np array on the CPU
+        batch_loss = torch.stack(batch_loss).detach().cpu().numpy()
+        epoch_loss.append(batch_loss)
+
+     
             
-            # if write_outcome:
-            #     with open('output.txt', 'a') as file:
-            #         file.write(f'\n#{resize: < 10}| {batch_size: <10}| {forward_all: <10}| yes    | {hours}:{minutes}:{seconds:.02f}  | {epochs: <10} #')
-                
-            
-    else: 
-
-         # Get the first batch from the iterator
-        first_batch = next(iter(train_loader))
-        print(first_batch['images'].shape, first_batch['masks'].shape)
-        #first_batch = next(train_loader_iter)
-        batch_images = first_batch['images'].to(DEVICE)
-        batch_masks = first_batch['masks'].to(DEVICE)
-        
-        soft = model(batch_images)
-        preds = torch.argmax(soft, dim=1)
-        evals = []
+        ############### Evaluate on Validation ###########
+        # I am unsure if we should be evaluating or applying the loss function
+        # Evaluation easily shows the performance on all of the class, but I think generally people look at the validation loss
+        # be careful to avoid overfitting on the validation set
         multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE)
-        for p,m in zip(preds, batch_masks):
-            evals.append(multi_jaccard(p, m))
+        batch_evals = []
+        for batch in tqdm(val_loader): # use islice(val_loader, 10) if writieing new code to test for bugs
+            
+            with autocast(): # context manager. AMP. 
+                pred = model.predict(batch['images'].to(DEVICE)) # the prediction function applies the forward pass and a softmax, shouldn't there be an argmax somewhere?
+                # look into using an argmax with IoU
+                
+                batch_evals.append(multi_jaccard(pred, batch['masks'].float().to(DEVICE)))
+        # I AM NOT SURE IF THIS IS SHOWING WHAT WE THINK THIS IS SHOWING.
+        mean_epoch_evals = torch.mean(torch.stack(batch_evals, dim= 1),dim = 1)
+        print(mean_epoch_evals)
+        epoch_evals.append(mean_epoch_evals)
+
+
+
+    #    if plot_batch_loss:
+    #         ax1.plot(batch_loss, label = f'Epoch {i}')
+    #     # Add title and axis labels
+    # fig1, ax1 = plt.subplots()
+    # if plot_batch_loss:
+    #     ax1.set_title('Batch Losses CE weight = (%s,%s,%s)'%(w1,w2,w3))
+    #     ax1.set_xlabel('Batch Index')
+    #     ax1.set_ylabel('Loss')
+    #     ax1.legend()
+    #     fig1.savefig("images/single_batch_losses_weight(%s,%s,%s).png"%(w1,w2,w3))
+
+    # #print(epoch_evals)
+    # #epoch_loss = epoch_loss.detach().cpu().numpy()
+    # #print(epoch_loss)
+    # fig2, ax2 = plt.subplots()
+    # epoch_loss_flat = [loss for epoch_list in epoch_loss for loss in epoch_list]
+    # ax2.plot(epoch_loss_flat)
+    # #ax2.plot(epoch_loss[1], label = 'Epoch 1')
+    # # Add title and axis labels
+    # ax2.set_title('Batch Losses CE weight = (%s,%s,%s)'%(w1,w2,w3))
+    # ax2.set_xlabel('Batch Index')
+    # ax2.set_ylabel('Loss')
+    # #ax2.legend()
+    # fig2.savefig("images/epochs_batch_losses_weight(%s,%s,%s).png"%(w1,w2,w3))
+
+    # #print(eval_loss)
+    # # I'd like to plot the evaluation loss for each epochand the training loss for each epoch
+    # epoch_evals = np.array([[tensor.detach().cpu().numpy() for tensor in eval_list] for eval_list in epoch_evals])
+    
+    # fig3, ax3 = plt.subplots()
+    # # iterate over the second axis
+    # for i in range(epoch_evals.shape[1]):
+
+    #     ax3.plot(epoch_evals[:,i], label = 'JaccardIndex')
+    # ax3.plot(np.mean(np.array(epoch_loss), axis = 1), label = 'Loss')
+    # #plt.show(fig3)
+    # ax3.set_title('validation and loss by epoch weight(%s,%s,%s)'%(w1,w2,w3))
+    # ax3.set_xlabel('Epoch Index')
+    # ax3.set_ylabel('Loss and JaccardIndex')
+    # ax3.legend()
+    # fig3.savefig("images/eval_loss_by_epoch_weight(%s,%s,%s).png"%(w1,w2,w3))
         
-        evals = torch.mean(torch.stack(evals, dim= 1),dim = 1)
-        print(evals)
-        print(multi_jaccard(preds, batch_masks)) # Additional dimension ... will be flattened into the batch dimension.
+    # TODO: We need to save the model, but I also think we should save the results and the hyperparameters in a csv file: training_loss, val_loss, training_time, training_time per batch, IoU, etc
+                
 if __name__ == "__main__":
-    test()
+    main()
