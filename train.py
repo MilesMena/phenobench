@@ -16,7 +16,8 @@ from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from itertools import islice
-
+# I despise np arrays that display in scientific notaton
+np.set_printoptions(formatter={'float_kind':'{:f}'.format})
 
 
 
@@ -35,8 +36,6 @@ def main():
     BATCH_SIZE = 4 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
     EPOCHS = 4
     LR = .001
-    
-    
     # use GPU
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     print(DEVICE)
@@ -48,7 +47,7 @@ def main():
 
     LOSS_WEIGHT = torch.ones(3).to(DEVICE) # 3 is the number of classes for this task
     # calculate weights by processing dataset histogram balancing by class 
-    LOSS_WEIGHT[0], LOSS_WEIGHT[1], LOSS_WEIGHT[2] = .5,2,10                                 # CLASS LABELS: {0:soil, 1:crop, 2: weed}
+    LOSS_WEIGHT[0], LOSS_WEIGHT[1], LOSS_WEIGHT[2] = .1,2,100                                # CLASS LABELS: {0:soil, 1:crop, 2: weed}
 
     ############# Init the Phenobench DataLoader #################
     # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
@@ -105,9 +104,9 @@ def main():
 
     for i in range(EPOCHS):
         batch_loss = []
-        for batch in tqdm(train_loader): # use islice(train_loader, 10) if writieing new code to test for bugs
+        for batch in tqdm(train_loader): # # testing code: tqdm(islice(train_loader,8))  Training model:  tqdm(train_loader)
         
-            ############ Computer Loss for each Batch ###########
+            ############ Compute Loss for each Batch ###########
             with autocast(): # context manager. AMP. Uses float16 and float32 when appropriate to decrease computations expense 
                 loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
                 loss = loss.requires_grad_()
@@ -131,19 +130,24 @@ def main():
         # Evaluation easily shows the performance on all of the class, but I think generally people look at the validation loss
         # be careful to avoid overfitting on the validation set
         multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE)
-        batch_evals = []
-        for batch in tqdm(val_loader): # use islice(val_loader, 10) if writieing new code to test for bugs
+        val_loss = []
+        val_iou = []
+        for batch in tqdm(val_loader): # testing code: tqdm(islice(train_loader),8)  Training model:  tqdm(val_loader)
             
             with autocast(): # context manager. AMP. 
-                pred = model.predict(batch['images'].to(DEVICE)) # the prediction function applies the forward pass and a softmax, shouldn't there be an argmax somewhere?
-                # look into using an argmax with IoU
-                
-                batch_evals.append(multi_jaccard(pred, batch['masks'].float().to(DEVICE)))
-        # I AM NOT SURE IF THIS IS SHOWING WHAT WE THINK THIS IS SHOWING.
-        mean_epoch_evals = torch.mean(torch.stack(batch_evals, dim= 1),dim = 1)
-        print(mean_epoch_evals)
-        epoch_evals.append(mean_epoch_evals)
+                # For cross entropy loss we pass the raw logits compared to the labels
+                logits = model(batch['images'].to(DEVICE)) 
+                # loss.item returns a python float, and without it we put a bunch of tensors on the GPU which takes up memory 
+                val_loss.append(loss_func(logits, batch['masks'].long().to(DEVICE)).item())
+                # iou.detech().cpu().tolist() first removes grad_requried = True, then moves to the cpu then converts to a list
+                val_iou.append(multi_jaccard(model.predict_from_logits(logits), batch['masks'].long().to(DEVICE)).detach().cpu().tolist())
 
+        mean_val_loss = np.array(val_loss).mean()
+        mean_val_iou = np.array(val_iou).mean(axis = 0) # mean of the columns
+
+        
+        print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou}")
+        #np.savetxt('validation_prediction.txt', pred.reshape(-1, 1).detach().cpu().numpy())
 
 
     #    if plot_batch_loss:
@@ -188,7 +192,7 @@ def main():
     # ax3.legend()
     # fig3.savefig("images/eval_loss_by_epoch_weight(%s,%s,%s).png"%(w1,w2,w3))
         
-    # TODO: We need to save the model, but I also think we should save the results and the hyperparameters in a csv file: training_loss, val_loss, training_time, training_time per batch, IoU, etc
+    # TODO: We need to save the model, but I also think we should save the results and the hyperparameters by appending to a csv file: training_loss, val_loss, training_time, training_time per batch, IoU, etc
                 
 if __name__ == "__main__":
     main()
