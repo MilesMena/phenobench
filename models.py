@@ -67,7 +67,12 @@ class UNET(nn.Module):
     
     def predict(self, x):
         x = self.forward(x)
-        return self.softmax(x)
+        x = self.softmax(x)
+        return torch.argmax(x, dim = 1)
+    
+    def predict_from_logits(self, x):
+        x = self.softmax(x)
+        return torch.argmax(x, dim = 1)
 
 
 
