@@ -16,6 +16,7 @@ from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
 import matplotlib.pyplot as plt
 from itertools import islice
+import json
 # I despise np arrays that display in scientific notaton
 np.set_printoptions(formatter={'float_kind':'{:f}'.format})
 
@@ -34,11 +35,14 @@ def main():
     ############## Hyperparameters #################
     RESIZE = 128
     BATCH_SIZE = 4 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
-    EPOCHS = 4
+    EPOCHS = 1
     LR = .001
     # use GPU
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    # For Ryan's puny mac:
+    DEVICE = 'mps' if torch.backends.mps.is_available() else DEVICE
     print(DEVICE)
+
     # Set the random seed for CPU operations
     torch.manual_seed(42)
     # Set the random seed for CUDA operations (if available)
@@ -52,8 +56,9 @@ def main():
     ############# Init the Phenobench DataLoader #################
     # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
     # ex: train_data[image_index]['image']
-    train_data = PhenoBench(r"data\PhenoBench", split = "train", target_types=["semantics"])
-    val_data = PhenoBench(r"data\PhenoBench", split = "val", target_types=["semantics"])
+    DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
+    train_data = PhenoBench(DATA_PATH, split = "train", target_types=["semantics"])
+    val_data = PhenoBench(DATA_PATH, split = "val", target_types=["semantics"])
 
     ################ Data Augmentation ################
     # We resize so that our GPU's can handle the number of parameters 
@@ -193,6 +198,28 @@ def main():
     # fig3.savefig("images/eval_loss_by_epoch_weight(%s,%s,%s).png"%(w1,w2,w3))
         
     # TODO: We need to save the model, but I also think we should save the results and the hyperparameters by appending to a csv file: training_loss, val_loss, training_time, training_time per batch, IoU, etc
+    model_parameters = {
+        "batch_size": BATCH_SIZE,
+        "epochs": EPOCHS,
+        "learning_rate": LR,
+        "loss_weight": LOSS_WEIGHT.tolist(),
+        "resize": RESIZE,
+        "device": DEVICE,
+        "mean_val_loss": mean_val_loss,
+        "mean_val_iou": mean_val_iou.tolist()
+    }
+    save_model(model, model_parameters)
+
+
+def save_model(model, model_stats={}):
+    model_id = str(np.random.randint(10000))
+    model_path = os.path.join("models", model_id)
+    os.makedirs(model_path)
+    torch.save(model, os.path.join(model_path, "model.pt"))
+    with open(os.path.join(model_path, "model_stats.json"), "w") as json_file:
+        json.dump(model_stats, json_file, indent=4)
+    print(f"Model saved at {model_path}")
+
                 
 if __name__ == "__main__":
     main()
