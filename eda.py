@@ -2,6 +2,7 @@ import os
 from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
+from decimal import Decimal
 
 def pixel_frequencies():
 
@@ -22,9 +23,9 @@ def pixel_frequencies():
                     # Convert the image data to a numpy array
                     data = np.array(img)
                     # Increment the counters
-                    count_dirt.append(np.sum(data == 0))
-                    count_plant.append(np.sum(data == 1) + np.sum(data == 3))
-                    count_weed.append(np.sum(data == 2) + np.sum(data == 4))
+                    count_dirt.append(Decimal(int(np.sum(data == 0))))
+                    count_plant.append(Decimal(int(np.sum(data == 1) + np.sum(data == 3))))
+                    count_weed.append(Decimal(int(np.sum(data == 2) + np.sum(data == 4))))
                     total_files += 1
             # display the image with matplotlib
                     if DISPLAY_IMAGES:
@@ -37,6 +38,7 @@ def pixel_frequencies():
                         plt.show()
 
     total_pixels = sum(count_dirt) + sum(count_plant) + sum(count_weed)
+
     print(f"average dirt percentage: {100*sum(count_dirt)/total_pixels}")
     print(f"average plant percentage: {100*sum(count_plant)/total_pixels}")
     print(f"average weed percentage: {100*sum(count_weed)/total_pixels}")
