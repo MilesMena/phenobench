@@ -18,7 +18,7 @@ import matplotlib.pyplot as plt
 from itertools import islice
 import json
 import csv
-
+from torchvision.models.segmentation import deeplabv3_resnet50
 
 # I despise np arrays that display in scientific notaton
 np.set_printoptions(formatter={'float_kind':'{:f}'.format})
@@ -36,9 +36,9 @@ def main():
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
 
     ############## Hyperparameters #################
-    RESIZE = 1024
+    RESIZE = 256
     BATCH_SIZE = 2 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
-    EPOCHS = 100
+    EPOCHS = 5
     LR = .0001
     # use GPU
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -93,16 +93,29 @@ def main():
 
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
-    model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
+    #model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
     
+    model =deeplabv3_resnet50(weights=None).to(DEVICE)
+    model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
+    model.to(DEVICE)
+    
+
+    ############## Load a Saved Model ####################
+    # model = models.resnet18()
+    # # Load the saved model state dictionary
+    # saved_model_path = 'saved_model.pth'
+    # saved_model_state_dict = torch.load(saved_model_path)
+    # # Load the saved model state dictionary into your model
+    # model.load_state_dict(saved_model_state_dict)
+    # model.to(DEVICE)
+
     # Creates a GradScaler once at the beginning of training.
     scaler = GradScaler() # automated mixed precision. Dynamically scale between float16 and float32 stability and computation increases during back prop
     
-    eval_func = MulticlassJaccardIndex(num_classes=3, average=None).to(DEVICE) # https://stackoverflow.com/questions/48260415/pytorch-how-to-compute-iou-jaccard-index-for-semantic-segmentation
-    
+    # Loss function. Why do we choose ot use CrossEntropy?
     loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
     
-    # Define the Adam optimizer
+    # Define the Adam optimizer. Why do we choose to use the Adam optimizer?
     optimizer = optim.Adam(model.parameters(), lr = LR)
 
     flag = False
@@ -119,9 +132,10 @@ def main():
 
             ############ Compute Loss for each Batch ###########
             with autocast(): # context manager. AMP. Uses float16 and float32 when appropriate to decrease computations expense 
-                loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
+                #loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
+                loss = loss_func(model(batch['images'].to(DEVICE))['out'], batch['masks'].long().to(DEVICE)) # pytroch.models.segmentation returns an OrderedDict with 'out' as the only key
                 loss = loss.requires_grad_()
-                batch_loss.append(loss)
+            batch_loss.append(loss.item())
             ############ Backpropagate the Loss ##############
             # if loss.item() == float('nan'):
             #     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
@@ -133,10 +147,10 @@ def main():
 
         
 
-        print(f'Epoch {i} mean loss: {torch.mean(torch.stack(batch_loss))}')
+        print(f'Epoch {i} mean loss: {sum(batch_loss)/len(batch_loss)}')
 
         if (i + 1) % 5 == 0: 
-            mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+            #mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
                 
             model_parameters = {
                         "batch_size": BATCH_SIZE,
@@ -145,9 +159,10 @@ def main():
                         "loss_weight": LOSS_WEIGHT.tolist(),
                         "resize": RESIZE,
                         "device": DEVICE,
-                        "mean_val_loss": mean_val_loss,
-                        "mean_val_iou": mean_val_iou.tolist()
+                        "mean_val_loss": 'NA',
+                        "mean_val_iou": 'NA'
                     }
+
                     
             save_model(model, model_parameters)
 
@@ -184,7 +199,8 @@ def main():
         "mean_val_iou": mean_val_iou.tolist()
     }
     
-    save_model(model, model_parameters)
+    #save_model(model, model_parameters)
+
 
 def save_model(model, model_stats={}):
     model_id = str(np.random.randint(10000))
@@ -197,7 +213,7 @@ def save_model(model, model_stats={}):
 
 def evaluate_validation(model, val_loader, DEVICE, loss_func):
         model.eval()
-        multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE)
+        multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE) # https://stackoverflow.com/questions/48260415/pytorch-how-to-compute-iou-jaccard-index-for-semantic-segmentation
         val_loss = []
         val_iou = []
         print('VALIDATION: ')
@@ -206,6 +222,8 @@ def evaluate_validation(model, val_loader, DEVICE, loss_func):
             with autocast(): # context manager. AMP. 
                 # For cross entropy loss we pass the raw logits compared to the labels
                 logits = model(batch['images'].to(DEVICE)) 
+                logits = model(batch['images'].to(DEVICE))['out']
+
                 # loss.item returns a python float, and without it we put a bunch of tensors on the GPU which takes up memory 
                 val_loss.append(loss_func(logits, batch['masks'].long().to(DEVICE)).item())
                 # iou.detech().cpu().tolist() first removes grad_requried = True, then moves to the cpu then converts to a list
