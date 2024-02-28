@@ -1,51 +1,48 @@
 from phenobench import PhenoBench
-#from dataset import get_batch_idx, custom_collate
-from models import DoubleConv, UNET
+import os, csv, sys, json
 import numpy as np
 import torch
 import torch.nn as nn
-import os
 import albumentations as A
-from albumentations.pytorch.transforms import ToTensorV2
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, RandomSampler
 from torch.cuda.amp import autocast, GradScaler
-import time
 from tqdm import tqdm
-from torchmetrics import JaccardIndex
 from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
-import matplotlib.pyplot as plt
-from itertools import islice
-import json
-import csv
 from torchvision.models.segmentation import deeplabv3_resnet50
+from models import DoubleConv, UNET
+# DISUSED IMPORTS
+# import time
+# from dataset import get_batch_idx, custom_collate
+# from torchmetrics import JaccardIndex
+# from albumentations.pytorch.transforms import ToTensorV2
+# import matplotlib.pyplot as plt
+# from itertools import islice
 
 # I despise np arrays that display in scientific notaton
 np.set_printoptions(formatter={'float_kind':'{:f}'.format})
 
-
-
-# TODO: save checkoutpoint function
     
 # TODO: Plotting Function(s)
 
-# TODO: 
-
-def main():
+def main(model_name):
     # Activate my python environment for this task:                       C:\Users\menam\projects\phenobench\pheno_env\Scripts\activate
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
 
     ############## Hyperparameters #################
     RESIZE = 256
     BATCH_SIZE = 2 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
-    EPOCHS = 5
+    EPOCHS = 100
     LR = .0001
+    EVALUATE_IN_LOOP = True
+    TRAIN_PERCENTAGE = 1 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
+    VAL_PERCENTAGE = .2 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
+    SAVE_EVERY = 10
+
     # use GPU
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    # For Ryan's puny mac:
-    DEVICE = 'mps' if torch.backends.mps.is_available() else DEVICE
-    print(DEVICE)
-    evaluate_in_loop = False
+    DEVICE = 'mps' if torch.backends.mps.is_available() else DEVICE # For Ryan's puny mac:
+    print("DEVICE:", DEVICE)
 
     # Set the random seed for CPU operations
     torch.manual_seed(42)
@@ -87,16 +84,16 @@ def main():
         
         return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
 
-    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate, drop_last = True)
-    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate, drop_last = True)
+    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last = True, sampler=RandomSampler(train_data, replacement=False, num_samples=int(len(train_data)*TRAIN_PERCENTAGE)))
+    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(val_data, replacement=False, num_samples=int(len(val_data)*VAL_PERCENTAGE)))
 
 
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
-    #model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
+    model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
     
-    model =deeplabv3_resnet50(weights=None).to(DEVICE)
-    model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
+    # model = deeplabv3_resnet50(weights=None).to(DEVICE)
+    # model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
     model.to(DEVICE)
     
 
@@ -126,14 +123,14 @@ def main():
 
     for i in range(EPOCHS):
         batch_loss = []
-        for batch in tqdm(train_loader): # # testing code: tqdm(islice(train_loader,8))  Training model:  tqdm(train_loader)
+        for batch in tqdm(train_loader, colour="green"): # # testing code: tqdm(islice(train_loader,8))  Training model:  tqdm(train_loader)
             model.train()
             optimizer.zero_grad()  # Zero the gradients, so we only back prop this batch not this batch and all of the batches before it
 
             ############ Compute Loss for each Batch ###########
             with autocast(): # context manager. AMP. Uses float16 and float32 when appropriate to decrease computations expense 
                 #loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
-                loss = loss_func(model(batch['images'].to(DEVICE))['out'], batch['masks'].long().to(DEVICE)) # pytroch.models.segmentation returns an OrderedDict with 'out' as the only key
+                loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE)) # pytroch.models.segmentation returns an OrderedDict with 'out' as the only key
                 loss = loss.requires_grad_()
             batch_loss.append(loss.item())
             ############ Backpropagate the Loss ##############
@@ -149,21 +146,31 @@ def main():
 
         print(f'Epoch {i} mean loss: {sum(batch_loss)/len(batch_loss)}')
 
-        if (i + 1) % 5 == 0: 
+        if ((i + 1) % SAVE_EVERY == 0) or (i == EPOCHS - 1): 
             #mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
-                
+            # ############### Evaluate on Validation ###########
+            # # I am unsure if we should be evaluating or applying the loss function
+            # # Evaluation easily shows the performance on all of the class, but I think generally people look at the validation loss
+            # # be careful to avoid overfitting on the validation set
+            if EVALUATE_IN_LOOP:
+                mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+                print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou}")
+            else:
+                mean_val_loss, mean_val_iou = 'NA', 'NA'
+
+            
             model_parameters = {
+                        "model_name": model_name,
                         "batch_size": BATCH_SIZE,
-                        "epochs": EPOCHS,
+                        "epochs": i,
                         "learning_rate": LR,
                         "loss_weight": LOSS_WEIGHT.tolist(),
                         "resize": RESIZE,
                         "device": DEVICE,
-                        "mean_val_loss": 'NA',
-                        "mean_val_iou": 'NA'
+                        "mean_val_loss": mean_val_loss,
+                        "mean_val_iou": mean_val_iou,
                     }
 
-                    
             save_model(model, model_parameters)
 
         ################## MODEL STATISTICS #############
@@ -172,44 +179,29 @@ def main():
         # epoch_loss.append(batch_loss)
         # if flag:
         #     break
-        # ############### Evaluate on Validation ###########
-        # # I am unsure if we should be evaluating or applying the loss function
-        # # Evaluation easily shows the performance on all of the class, but I think generally people look at the validation loss
-        # # be careful to avoid overfitting on the validation set
-        # if evaluate_in_loop: 
-        #     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
-        #     print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou}")
-        # #np.savetxt('validation_prediction.txt', pred.reshape(-1, 1).detach().cpu().numpy())
-    
-    
-
-    if not evaluate_in_loop:
-        mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
-        print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou}")
-
-    # TODO: We need to save the model, but I also think we should save the results and the hyperparameters by appending to a csv file: training_loss, val_loss, training_time, training_time per batch, IoU, etc
-    model_parameters = {
-        "batch_size": BATCH_SIZE,
-        "epochs": EPOCHS,
-        "learning_rate": LR,
-        "loss_weight": LOSS_WEIGHT.tolist(),
-        "resize": RESIZE,
-        "device": DEVICE,
-        "mean_val_loss": mean_val_loss,
-        "mean_val_iou": mean_val_iou.tolist()
-    }
-    
-    #save_model(model, model_parameters)
 
 
 def save_model(model, model_stats={}):
-    model_id = str(np.random.randint(10000))
-    model_path = os.path.join("models", model_id)
-    os.makedirs(model_path)
-    torch.save(model, os.path.join(model_path, "model.pt"))
-    with open(os.path.join(model_path, "model_stats.json"), "w") as json_file:
+    model_path = os.path.join("models", model_stats["model_name"])
+    if not os.path.exists(model_path):
+        os.makedirs(model_path)
+        header = ['Epoch', 'Mean Loss', 'Mean IOU']
+        with open(os.path.join(model_path, 'history.csv'), 'w', newline='') as file:
+            writer = csv.writer(file)
+            writer.writerow(header)
+
+    current_data = [model_stats["epochs"], model_stats["mean_val_loss"], model_stats["mean_val_iou"]]
+    with open(os.path.join(model_path, 'history.csv'), 'a', newline='') as file:
+        writer = csv.writer(file)
+        writer.writerow(current_data)
+
+
+    epoch_path = os.path.join(model_path, f"epoch_{str(model_stats['epochs']).zfill(4)}")
+    os.makedirs(epoch_path)
+    torch.save(model, os.path.join(epoch_path, "model.pt"))
+    with open(os.path.join(epoch_path, "model_stats.json"), "w") as json_file:
         json.dump(model_stats, json_file, indent=4)
-    print(f"Model saved at {model_path}")
+    print(f"Model saved at {epoch_path}")
 
 def evaluate_validation(model, val_loader, DEVICE, loss_func):
         model.eval()
@@ -217,12 +209,11 @@ def evaluate_validation(model, val_loader, DEVICE, loss_func):
         val_loss = []
         val_iou = []
         print('VALIDATION: ')
-        for batch in tqdm(val_loader): # testing code: tqdm(islice(train_loader),8)  Training model:  tqdm(val_loader)
+        for batch in tqdm(val_loader, colour="red"): # testing code: tqdm(islice(train_loader),8)  Training model:  tqdm(val_loader)
             
             with autocast(): # context manager. AMP. 
                 # For cross entropy loss we pass the raw logits compared to the labels
                 logits = model(batch['images'].to(DEVICE)) 
-                logits = model(batch['images'].to(DEVICE))['out']
 
                 # loss.item returns a python float, and without it we put a bunch of tensors on the GPU which takes up memory 
                 val_loss.append(loss_func(logits, batch['masks'].long().to(DEVICE)).item())
@@ -230,10 +221,18 @@ def evaluate_validation(model, val_loader, DEVICE, loss_func):
                 val_iou.append(multi_jaccard(model.predict_from_logits(logits), batch['masks'].long().to(DEVICE)).detach().cpu().tolist())
 
         mean_val_loss = np.array(val_loss).mean()
-        mean_val_iou = np.array(val_iou).mean(axis = 0) # mean of the columns
+        mean_val_iou = np.array(val_iou).mean(axis = 0).tolist() # mean of the columns
 
         return mean_val_loss, mean_val_iou
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) != 2:
+        print("Usage: python train.py <model_name>")
+        sys.exit(1)
+
+    if os.path.exists(os.path.join("models", sys.argv[1])):
+        print("Model name already exists. Please choose a different name.")
+        sys.exit(1)
+
+    main(sys.argv[1])
