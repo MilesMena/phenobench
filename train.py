@@ -24,69 +24,27 @@ np.set_printoptions(formatter={'float_kind':'{:f}'.format})
 
     
 # TODO: Plotting Function(s)
+############## Hyperparameters #################
+RESIZE = 1024
+BATCH_SIZE = 1 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
+EPOCHS = 100
+LR = .0001
+EVALUATE_IN_LOOP = True
+TRAIN_PERCENTAGE = 1 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
+VAL_PERCENTAGE = .25 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
+SAVE_EVERY = 10
+DEVICE = 'cpu'
+DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
+# calculate weights by processing dataset histogram balancing by class 
+LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
+
 
 def main(model_name):
     # Activate my python environment for this task:                       C:\Users\menam\projects\phenobench\pheno_env\Scripts\activate
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
-
-    ############## Hyperparameters #################
-    RESIZE = 256
-    BATCH_SIZE = 2 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
-    EPOCHS = 100
-    LR = .0001
-    EVALUATE_IN_LOOP = True
-    TRAIN_PERCENTAGE = 1 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
-    VAL_PERCENTAGE = .2 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
-    SAVE_EVERY = 10
-
     # use GPU
-    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-    DEVICE = 'mps' if torch.backends.mps.is_available() else DEVICE # For Ryan's puny mac:
-    print("DEVICE:", DEVICE)
-
-    # Set the random seed for CPU operations
-    torch.manual_seed(42)
-    # Set the random seed for CUDA operations (if available)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-
-    LOSS_WEIGHT = torch.ones(3).to(DEVICE) # 3 is the number of classes for this task
-    # calculate weights by processing dataset histogram balancing by class 
-    LOSS_WEIGHT[0], LOSS_WEIGHT[1], LOSS_WEIGHT[2] = (1/88.45), (1/11.03), (1/.5)                          # CLASS LABELS: {0:soil, 1:crop, 2: weed}
-
-    ############# Init the Phenobench DataLoader #################
-    # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
-    # ex: train_data[image_index]['image']
-    DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
-    train_data = PhenoBench(DATA_PATH, split = "train", target_types=["semantics"])
-    val_data = PhenoBench(DATA_PATH, split = "val", target_types=["semantics"])
-
-    ################ Data Augmentation ################
-    # We resize so that our GPU's can handle the number of parameters 
-    # TODO: look into applying more augmentations other than resize
-    transform = A.Compose([
-                A.Resize(height = RESIZE, width = RESIZE)  # original images size:  (1024, 1024)
-                ]) 
-    
-    
-    ################# PyTorch DataLoader ##################
-    # Does this load ALL of the training images into memory, or only those collected for the batch that is currently training
-    def custom_collate(batch):
-        # Collate customizes how individual samples are grouped together https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
-        # The phenobench library provides an efficient way to load data, but it doesn't batch the images
-        # So we write a custom collation function to neatly pass the data to DataLoader, and we transform the data with albumentations here because
-        # it helps save memory loading in a rezied image.
-        # This function could possibly go outside main(), but that changes the relationship to the function transform. Look into this
-        transformed = [transform(image=np.array(item['image']), mask = np.array(item['semantics'])) for item in batch]
-        images = [item['image'] for item in transformed]
-        masks = [item['mask'] for item in transformed]
-
-        
-        return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
-
-    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last = True, sampler=RandomSampler(train_data, replacement=False, num_samples=int(len(train_data)*TRAIN_PERCENTAGE)))
-    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(val_data, replacement=False, num_samples=int(len(val_data)*VAL_PERCENTAGE)))
-
+    set_device()
+    train_loader, val_loader = data_loaders()
 
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
@@ -115,12 +73,7 @@ def main(model_name):
     # Define the Adam optimizer. Why do we choose to use the Adam optimizer?
     optimizer = optim.Adam(model.parameters(), lr = LR)
 
-    flag = False
     ############### Train the Model ###############
-    eval_loss = []
-    epoch_evals = []
-    epoch_loss = []
-
     for i in range(EPOCHS):
         batch_loss = []
         for batch in tqdm(train_loader, colour="green"): # # testing code: tqdm(islice(train_loader,8))  Training model:  tqdm(train_loader)
@@ -181,6 +134,53 @@ def main(model_name):
         #     break
 
 
+
+def set_device():
+    global DEVICE, LOSS_WEIGHT
+    torch.manual_seed(42) # Set the random seed for CPU operations
+    if torch.cuda.is_available():
+        DEVICE = 'cuda'
+        torch.cuda.manual_seed_all(42) # Set the random seed for CUDA operations (if available)
+    if torch.backends.mps.is_available():
+        DEVICE = 'mps'
+    print("DEVICE:", DEVICE)
+    LOSS_WEIGHT = torch.tensor(LOSS_WEIGHT).to(DEVICE) # 3 is the number of classes for this task
+
+def data_loaders():
+    ############# Init the Phenobench DataLoader #################
+    # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
+    # ex: train_data[image_index]['image']
+    train_data = PhenoBench(DATA_PATH, split = "train", target_types=["semantics"])
+    val_data = PhenoBench(DATA_PATH, split = "val", target_types=["semantics"])
+
+    ################ Data Augmentation ################
+    # We resize so that our GPU's can handle the number of parameters 
+    # TODO: look into applying more augmentations other than resize
+    transform = A.Compose([
+                A.Resize(height = RESIZE, width = RESIZE)  # original images size:  (1024, 1024)
+                ]) 
+    
+    
+    ################# PyTorch DataLoader ##################
+    # Does this load ALL of the training images into memory, or only those collected for the batch that is currently training
+    def custom_collate(batch):
+        # Collate customizes how individual samples are grouped together https://python.plainenglish.io/understanding-collate-fn-in-pytorch-f9d1742647d3
+        # The phenobench library provides an efficient way to load data, but it doesn't batch the images
+        # So we write a custom collation function to neatly pass the data to DataLoader, and we transform the data with albumentations here because
+        # it helps save memory loading in a rezied image.
+        # This function could possibly go outside main(), but that changes the relationship to the function transform. Look into this
+        transformed = [transform(image=np.array(item['image']), mask = np.array(item['semantics'])) for item in batch]
+        images = [item['image'] for item in transformed]
+        masks = [item['mask'] for item in transformed]
+
+        
+        return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
+
+    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last = True, sampler=RandomSampler(train_data, replacement=False, num_samples=int(len(train_data)*TRAIN_PERCENTAGE)))
+    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(val_data, replacement=False, num_samples=int(len(val_data)*VAL_PERCENTAGE)))
+
+    return train_loader, val_loader
+
 def save_model(model, model_stats={}):
     model_path = os.path.join("models", model_stats["model_name"])
     if not os.path.exists(model_path):
@@ -225,6 +225,17 @@ def evaluate_validation(model, val_loader, DEVICE, loss_func):
 
         return mean_val_loss, mean_val_iou
 
+
+
+def load_and_evaluate(model_path):
+    set_device()
+    # Load the saved model state dictionary
+    # model = UNET(in_channels = 3, out_channels=3)
+    model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
+    _, val_loader = data_loaders()
+    loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
+    mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+    print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou} for model at {model_path}")
 
 if __name__ == "__main__":
     if len(sys.argv) != 2:
