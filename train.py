@@ -10,7 +10,7 @@ from tqdm import tqdm
 from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
 from torchvision.models.segmentation import deeplabv3_resnet50
-from models import DoubleConv, UNET
+from models import UNET
 # DISUSED IMPORTS
 # import time
 # from dataset import get_batch_idx, custom_collate
@@ -33,7 +33,7 @@ EVALUATE_IN_LOOP = True
 TRAIN_PERCENTAGE = 1 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
 VAL_PERCENTAGE = .25 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
 SAVE_EVERY = 10
-DEVICE = 'cpu'
+DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
 # calculate weights by processing dataset histogram balancing by class 
 LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
@@ -237,16 +237,9 @@ def load_and_evaluate(model_path):
     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
     print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou} for model at {model_path}")
 
-def load_model(model_path):
-    set_device()
-    # Load the saved model state dictionary
-    # model = UNET(in_channels = 3, out_channels=3)
-    model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
-    _, val_loader = data_loaders()
-    loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
-    mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
-    print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou} for model at {model_path}")
 
+    model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
+    
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python train.py <model_name>")
