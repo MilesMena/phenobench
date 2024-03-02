@@ -237,6 +237,16 @@ def load_and_evaluate(model_path):
     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
     print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou} for model at {model_path}")
 
+def load_model(model_path):
+    set_device()
+    # Load the saved model state dictionary
+    # model = UNET(in_channels = 3, out_channels=3)
+    model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
+    _, val_loader = data_loaders()
+    loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
+    mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+    print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou} for model at {model_path}")
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python train.py <model_name>")
