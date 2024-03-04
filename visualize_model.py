@@ -8,8 +8,9 @@ from phenobench import PhenoBench
 import numpy as np
 from tqdm import tqdm
 from torch.cuda.amp import autocast, GradScaler
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 
-
+plt.rcParams["keymap.quit"] = ['ctrl+w', 'cmd+w', 'q']
 
 
 # Function to recursively search for Conv2d layers
@@ -24,8 +25,10 @@ def find_conv_layers(module):
     return conv_layers
 
 
+
+
 # feature maps - output of each filter in a given layer for an input image 
-def feature_maps( img, cnn_layers, layer_name, layer_idx, model, DEVICE, rows = 3, cols = 3):
+def feature_maps( img, cnn_layers, layer_name, layer_idx, model, DEVICE, rows = 3, cols = 3, channel_shift = 0):
     # device-agnosticaly load image as a torch tensor with the proper shape (1,3,1024,1024) and format (float)
     img= torch.tensor(np.transpose(np.array(img), (2,0,1))).float().unsqueeze(0).to(DEVICE)
     
@@ -55,15 +58,21 @@ def feature_maps( img, cnn_layers, layer_name, layer_idx, model, DEVICE, rows = 
     else:
         fig = plt.figure(figsize=(12, 8))
         for i in range(1, (rows * cols) + 1):
-            feature_map = layer_output[i-1, :, :].cpu().numpy()
+            feature_map = layer_output[channel_shift + i-1, :, :].cpu().numpy()
             fig.add_subplot(rows, cols, i)
             # virdis is purple with lower values and yellow with highest values (purple -> teal -> green -> yellow)
             plt.imshow(feature_map, cmap='viridis')
-            plt.title(f'Channel {i}')
+            plt.title(f'Channel {channel_shift + i}')
             # plt.tight_layout()
             plt.axis(False)
+            plt.colorbar()
         fig.suptitle(f"Feature Maps at index {layer_idx} of {layer_name.capitalize()} layer")
         plt.show()
+
+        #plt.gcf().canvas.mpl_connect('key_press_event', close_plot)
+
+        # Add a colorbar
+      
 
     return layer_output.clone()
 
@@ -136,8 +145,9 @@ def activation_map(cnn_layers, layer_name, feature_map_idx, model, DEVICE, steps
         ax.imshow(input_noise_display)
         ax.axis('off')
         ax.set_title(f"Layer at Index {feature_map_idx}")
-    fig.suptitle(f"Images Producing Maximal Activition of Layers in {layer_name.capitalize() }")
-    plt.show()
+
+        # Add a single colorbar for all the images
+    
 # integrated gradients - measure the importance of each input feature (pixel value)
 
 # saliency maps - highlight regions of an input image that are the most important
@@ -167,10 +177,26 @@ if __name__ == "__main__":
     cnn_layers['bottleneck'] = find_conv_layers(model.bottleneck)
     cnn_layers['ups'] = find_conv_layers(model.ups)
     cnn_layers['final_conv'] = [model.final_conv]
+    
+    img_idx = 15
+    img = train_data[img_idx]['image']
+    mask = train_data[img_idx]['semantics']
+   
+   
+    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+       
+    axs[0].imshow(img)
+    axs[1].imshow(mask)
+    #img.show()
+    
+    plt.show(block = False)
 
-    output = feature_maps(train_data[15]['image'], cnn_layers, 'downs', 0, model, DEVICE)
+
+    output = feature_maps(img, cnn_layers, 'ups', 7, model, DEVICE,rows = 3, cols = 3, channel_shift= 0)
     #activation_map(cnn_layers, 'downs', 4, model, DEVICE, 50, .1)
 
-
-
     
+
+
+
+        
