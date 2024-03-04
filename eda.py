@@ -3,6 +3,11 @@ from PIL import Image
 import numpy as np
 import matplotlib.pyplot as plt
 from decimal import Decimal
+import torch
+from phenobench import PhenoBench
+from torchmetrics.classification import MulticlassJaccardIndex
+from tqdm import tqdm
+from torch.cuda.amp import autocast
 
 def pixel_frequencies():
 
@@ -73,6 +78,33 @@ def pixel_frequencies():
     plt.tight_layout()
     plt.show()
 
+def prediction_metrics(model_id, split, iter,  DEVICE):
+    # load the model onto device
+    model = torch.load(os.path.join('models', str(model_id), 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
+    model.eval()
+
+    # load an image
+    data = PhenoBench(os.path.join("data", "PhenoBench"), split = split , target_types=["semantics"])
+
+    # Evaulation Metric
+    multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE)
+
+    iou = []
+    for idx in tqdm(range(iter)):
+        with autocast(): 
+            # Format the image into the model input structure
+            img = torch.tensor(np.transpose(np.array(data[idx]['image']), (2,0,1))).float().unsqueeze(0).to(DEVICE)
+            iou.append(multi_jaccard(model.predict(img), torch.tensor(data[idx]['semantics']).unsqueeze(0).to(DEVICE)).cpu().tolist())
+    
+    return iou
+
 
 if __name__ == "__main__":
-    pixel_frequencies()
+    #pixel_frequencies()
+
+    
+    DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+
+    results = prediction_metrics(5265, 'train', 10,  DEVICE)
+
+    print(results)
