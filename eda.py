@@ -8,6 +8,10 @@ from phenobench import PhenoBench
 from torchmetrics.classification import MulticlassJaccardIndex
 from tqdm import tqdm
 from torch.cuda.amp import autocast
+from matplotlib.colors import ListedColormap
+from itertools import product
+
+plt.rcParams["keymap.quit"] = ['ctrl+w', 'cmd+w', 'q']
 
 def pixel_frequencies():
 
@@ -89,22 +93,83 @@ def prediction_metrics(model_id, split, iter,  DEVICE):
     # Evaulation Metric
     multi_jaccard = MulticlassJaccardIndex(num_classes=3, average = None).to(DEVICE)
 
-    iou = []
+    ious = []
     for idx in tqdm(range(iter)):
         with autocast(): 
             # Format the image into the model input structure
             img = torch.tensor(np.transpose(np.array(data[idx]['image']), (2,0,1))).float().unsqueeze(0).to(DEVICE)
-            iou.append(multi_jaccard(model.predict(img), torch.tensor(data[idx]['semantics']).unsqueeze(0).to(DEVICE)).cpu().tolist())
+            ious.append(multi_jaccard(model.predict(img), torch.tensor(data[idx]['semantics']).unsqueeze(0).to(DEVICE)).cpu().tolist())
     
-    return iou
+    return ious
 
+def best_worst_image(results):
+    # init dictionary of results
+    best_worst = {'index':{}, 'iou':{}}
+    keys = ['soil','crop','weed']
+
+    # iterate over the List[List[]]
+    for img_idx,result in enumerate(results):
+        # iterate over the List[] of len 3
+        for j, key in enumerate(keys):
+            # check if we already have a best/worst value
+            if 'best_' + key not in best_worst['iou']:
+                best_worst['iou']['best_' + key] = 0
+                best_worst['index']['best_' + key] = 'NA'
+
+            # update index and iou if our current iou is better than the previous
+            elif result[j] > best_worst['iou']['best_' + key]:
+                best_worst['iou']['best_' + key] = result[j]
+                best_worst['index']['best_' + key] = img_idx
+
+            # check if we already have a best/worst value
+            if 'worst_' + key not in best_worst['iou']:
+                best_worst['iou']['worst_' + key] = 1
+                best_worst['index']['worst_' + key] = 'NA'
+
+            # update index and iou if our current iou is better than the previous
+            elif result[j] < best_worst['iou']['worst_' + key]:
+                best_worst['iou']['worst_' + key] = result[j]
+                best_worst['index']['worst_' + key] = img_idx
+
+    return best_worst
+
+def plot_img_idx(model_id, split, img_idx, DEVICE, insert_title_text = ''):
+    model = torch.load(os.path.join('models', str(model_id), 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
+    model.eval()
+
+    # load an image
+    data = PhenoBench(os.path.join("data", "PhenoBench"), split = split , target_types=["semantics"])
+    img = data[img_idx]['image']
+    mask = np.array(data[img_idx]['semantics'])
+    pred = model.predict(torch.tensor(np.transpose(np.array(img), (2,0,1))).float().unsqueeze(0).to(DEVICE)).cpu().numpy()[0]
+
+    fig, axs = plt.subplots(1,4, figsize = (18,5))
+    axs[0].imshow(img)
+    axs[0].set_title('Image')
+
+    axs[1].imshow(mask,  cmap = 'viridis')
+    axs[1].set_title('Semantic Mask')
+
+    axs[2].imshow(pred, cmap = 'viridis')
+    axs[2].set_title('Prediction')
+
+    axs[3].imshow((mask - pred).astype(int), cmap = 'viridis')
+    axs[3].set_title('Semantic Mask Minus Prediction')
+
+    fig.suptitle(f"Model ID: {model_id}, Split {split}, Image Index {img_idx}, {insert_title_text}")
+    plt.show(block = False)
 
 if __name__ == "__main__":
     #pixel_frequencies()
 
-    
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    results = prediction_metrics(5265, 'train', 10,  DEVICE)
+    results = prediction_metrics(5265, 'train', 100,  DEVICE)
 
-    print(results)
+    best_worst = best_worst_image(results)
+    
+    #perform, semant = 'best', 'crop'
+    for perform, semant in product(['best', 'worst'], ['soil', 'crop', 'weed']):
+        plot_img_idx(5265, 'train', best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f'{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}')
+    
+    str(input('Press enter to stop eda.py: '))
