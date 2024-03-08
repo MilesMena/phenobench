@@ -38,10 +38,11 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
 # calculate weights by processing dataset histogram balancing by class 
 LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
-EXTRA_CHANNELS = {
+EXTRA_CHANNELS = { # These feature channels come from this paper: https://ieeexplore.ieee.org/stamp/stamp.jsp?tp=&arnumber=8460962
     "ExG" : lambda pix: np.dot(pix[:3], [-1, 2, -1]), #2*pix[1] - pix[0] - pix[2],
     "ExR": lambda pix: np.dot(pix[:3], [1.4, -1, 0]),
     "CIVE": lambda pix: np.dot(pix[:3], [-0.441, 0.881, -0.385]) - 18.78745,
+    "NDI": lambda pix: (pix[1] - pix[0])/(pix[1] + pix[0])
 }
 ADD_EDGE_CHANNEL = True
 
