@@ -164,12 +164,12 @@ if __name__ == "__main__":
 
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    results = prediction_metrics(5265, 'train', 100,  DEVICE)
+    results = prediction_metrics(5265, 'train', 10,  DEVICE)
 
     best_worst = best_worst_image(results)
     
     #perform, semant = 'best', 'crop'
     for perform, semant in product(['best', 'worst'], ['soil', 'crop', 'weed']):
-        plot_img_idx(5265, 'train', best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f'{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}')
+        plot_img_idx(5265, 'train', best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f"{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}")
     
     str(input('Press enter to stop eda.py: '))
