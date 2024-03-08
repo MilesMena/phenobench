@@ -11,12 +11,13 @@ from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
 from torchvision.models.segmentation import deeplabv3_resnet50
 from models import UNET
+import cv2
 # DISUSED IMPORTS
 # import time
 # from dataset import get_batch_idx, custom_collate
 # from torchmetrics import JaccardIndex
 # from albumentations.pytorch.transforms import ToTensorV2
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 # from itertools import islice
 
 # I despise np arrays that display in scientific notaton
@@ -37,7 +38,12 @@ DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
 # calculate weights by processing dataset histogram balancing by class 
 LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
-
+EXTRA_CHANNELS = {
+    "ExG" : lambda pix: np.dot(pix[:3], [-1, 2, -1]), #2*pix[1] - pix[0] - pix[2],
+    "ExR": lambda pix: np.dot(pix[:3], [1.4, -1, 0]),
+    "CIVE": lambda pix: np.dot(pix[:3], [-0.441, 0.881, -0.385]) - 18.78745,
+}
+ADD_EDGE_CHANNEL = True
 
 def main(model_name):
     # Activate my python environment for this task:                       C:\Users\menam\projects\phenobench\pheno_env\Scripts\activate
@@ -48,7 +54,7 @@ def main(model_name):
 
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
-    model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
+    model = UNET(in_channels = (len(EXTRA_CHANNELS)+3), out_channels=3).to(device=DEVICE)
     
     # model = deeplabv3_resnet50(weights=None).to(DEVICE)
     # model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
@@ -146,12 +152,46 @@ def set_device():
     print("DEVICE:", DEVICE)
     LOSS_WEIGHT = torch.tensor(LOSS_WEIGHT).to(DEVICE) # 3 is the number of classes for this task
 
+
+def add_channels(image):
+        if ADD_EDGE_CHANNEL:
+            image = add_edge_channel(image)
+        for _, fun in EXTRA_CHANNELS.items():
+            applied = np.apply_along_axis(fun, 2, image)
+            total = np.expand_dims(applied, axis=2)
+            image = np.concatenate((image, total),axis=2)
+        return image
+
+def add_edge_channel(image):
+    gray = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY)
+    edges = cv2.Canny(gray, threshold1=350, threshold2=400)
+    edges = edges / edges.max()
+    edges = np.expand_dims(edges, axis=2)
+    # fig, ax = plt.subplots(1, 2)
+    # ax[0].imshow(gray, cmap='gray')
+    # ax[0].set_title('Image')
+    # ax[1].imshow(edges, cmap='gray')
+    # ax[1].set_title('Edges')
+    # plt.show()
+    return np.concatenate((image, edges), axis=2)
+    
+
+
 def data_loaders():
     ############# Init the Phenobench DataLoader #################
     # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
     # ex: train_data[image_index]['image']
     train_data = PhenoBench(DATA_PATH, split = "train", target_types=["semantics"])
     val_data = PhenoBench(DATA_PATH, split = "val", target_types=["semantics"])
+
+    print(np.array(train_data[0]['image']))
+    if len(EXTRA_CHANNELS) > 0:
+        for image in tqdm(train_data, colour="blue"):
+            image['image'] = add_channels(np.array(image['image']))
+        for image in tqdm(val_data, colour="blue"):
+            image['image'] = add_channels(np.array(image['image']))
+    print(train_data[0]['image'])
+
 
     ################ Data Augmentation ################
     # We resize so that our GPU's can handle the number of parameters 
@@ -169,11 +209,9 @@ def data_loaders():
         # So we write a custom collation function to neatly pass the data to DataLoader, and we transform the data with albumentations here because
         # it helps save memory loading in a rezied image.
         # This function could possibly go outside main(), but that changes the relationship to the function transform. Look into this
-        transformed = [transform(image=np.array(item['image']), mask = np.array(item['semantics'])) for item in batch]
+        transformed = [transform(image=item['image'], mask = np.array(item['semantics'])) for item in batch]
         images = [item['image'] for item in transformed]
         masks = [item['mask'] for item in transformed]
-
-        
         return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
 
     train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last = True, sampler=RandomSampler(train_data, replacement=False, num_samples=int(len(train_data)*TRAIN_PERCENTAGE)))
