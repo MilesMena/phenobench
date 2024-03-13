@@ -82,9 +82,9 @@ def pixel_frequencies():
     plt.tight_layout()
     plt.show()
 
-def prediction_metrics(model_id, split, iter,  DEVICE):
+def prediction_metrics(model_id, split, iter,  DEVICE, epoch_dir = ''):
     # load the model onto device
-    model = torch.load(os.path.join('models', str(model_id), 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
+    model = torch.load(os.path.join('models', str(model_id),epoch_dir, 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
     model.eval()
 
     # load an image
@@ -133,8 +133,8 @@ def best_worst_image(results):
 
     return best_worst
 
-def plot_img_idx(model_id, split, img_idx, DEVICE, insert_title_text = ''):
-    model = torch.load(os.path.join('models', str(model_id), 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
+def plot_img_idx(model_id, split, img_idx, DEVICE, insert_title_text = '', epoch_dir= ''):
+    model = torch.load(os.path.join('models', str(model_id),epoch_dir, 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
     model.eval()
 
     # load an image
@@ -163,13 +163,18 @@ if __name__ == "__main__":
     #pixel_frequencies()
 
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model_name = '5265_balanced_weights_final_epochs'
+    results = prediction_metrics(model_name, 'train', 1000,  DEVICE, 'epoch_0009')
 
-    results = prediction_metrics(5265, 'train', 100,  DEVICE)
+
 
     best_worst = best_worst_image(results)
     
     #perform, semant = 'best', 'crop'
     for perform, semant in product(['best', 'worst'], ['soil', 'crop', 'weed']):
-        plot_img_idx(5265, 'train', best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f'{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}')
+        plot_img_idx(model_name, 'train', 
+                     best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f'{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}',
+                     epoch_dir = 'epoch_0009')
+
     
     str(input('Press enter to stop eda.py: '))
