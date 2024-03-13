@@ -133,6 +133,20 @@ def best_worst_image(results):
 
     return best_worst
 
+def top_best_worst(results, object, num_idx, top_best = True):
+    top = {}
+    obj = ['soil','crops','weeds']
+    sorted_data= sorted(enumerate(results), key= lambda x: x[1][obj.index(object)])
+    if top_best:
+        for idx, perform in sorted_data[-num_idx:]:
+            top[idx] = perform[obj.index(object)]
+    else: 
+        for idx, perform in sorted_data[:num_idx]:
+            top[idx] = perform[obj.index(object)]
+    return top
+
+
+
 def plot_img_idx(model_id, split, img_idx, DEVICE, insert_title_text = '', epoch_dir= ''):
     model = torch.load(os.path.join('models', str(model_id),epoch_dir, 'model.pt'), map_location=torch.device(DEVICE)).to(DEVICE)
     model.eval()
@@ -166,15 +180,17 @@ if __name__ == "__main__":
     model_name = '5265_balanced_weights_final_epochs'
     results = prediction_metrics(model_name, 'train', 1000,  DEVICE, 'epoch_0009')
 
+    #print(results)
 
-
-    best_worst = best_worst_image(results)
+    # best_worst = best_worst_image(results)
     
     #perform, semant = 'best', 'crop'
-    for perform, semant in product(['best', 'worst'], ['soil', 'crop', 'weed']):
-        plot_img_idx(model_name, 'train', 
-                     best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f'{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}',
-                     epoch_dir = 'epoch_0009')
+    # for perform, semant in product(['best', 'worst'], ['soil', 'crop', 'weed']):
+    #     plot_img_idx(model_name, 'train', 
+    #                  best_worst['index'][perform + '_' + semant], DEVICE, insert_title_text= f'{perform.capitalize()} {semant.capitalize()}: {best_worst['iou'][perform + '_' + semant]:.4f}',
+    #                  epoch_dir = 'epoch_0009')
 
-    
+    top = top_best_worst(results, 'weeds', 100, top_best = False)
+    print(top)
+
     str(input('Press enter to stop eda.py: '))
