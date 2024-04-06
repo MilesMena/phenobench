@@ -1,7 +1,6 @@
 __pycache__
 data
 images/**
-models/** 
+models
 submissions
 .DS_Store
-*.pt
