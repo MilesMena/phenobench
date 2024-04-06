@@ -36,6 +36,7 @@ VAL_PERCENTAGE = .25 # Should nominally be 1, but for testing purposes we can se
 SAVE_EVERY = 10
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
+SANDWICH_PATH = os.path.join("data", "sandwich_images")
 # calculate weights by processing dataset histogram balancing by class 
 LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
 
@@ -45,11 +46,24 @@ def main(model_name):
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
     # use GPU
     set_device()
-    train_loader = data_loaders("train", TRAIN_PERCENTAGE)
-    val_loader = data_loaders("val", VAL_PERCENTAGE)
+    # train_loader = data_loaders("train", TRAIN_PERCENTAGE)
+    # val_loader = data_loaders("val", VAL_PERCENTAGE)
+    CHANNELS = { # comment out the channels you don't want to include
+        "R": 0,
+        "G": 1,
+        "B": 2,
+        # "ExG": 3,
+        # "ExR": 4,
+        "CIVE": 5,
+        # "NDI": 6,
+        "YOLO": 7
+    }
+
+    train_loader = feature_engineered_data_loaders("train", CHANNELS, TRAIN_PERCENTAGE)
+    val_loader = feature_engineered_data_loaders("val", CHANNELS, VAL_PERCENTAGE)
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
-    model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
+    model = UNET(in_channels = len(CHANNELS), out_channels=3).to(device=DEVICE)
     
     # model = deeplabv3_resnet50(weights=None).to(DEVICE)
     # model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
@@ -146,6 +160,34 @@ def set_device():
         DEVICE = 'mps'
     print("DEVICE:", DEVICE)
     LOSS_WEIGHT = torch.tensor(LOSS_WEIGHT).to(DEVICE) # 3 is the number of classes for this task
+
+
+
+def feature_engineered_data_loaders(split, channels, percentage=1):
+    original_data = PhenoBench(DATA_PATH, split = split, target_types=["semantics"])
+
+    new_data = []
+    for i in tqdm(range(len(original_data)), colour="yellow", desc=f"Loading {split} data"):
+
+        image = np.load(os.path.join(SANDWICH_PATH, split, original_data[i]['image_name'].split(".")[0] + ".npy"))
+        new_image = np.stack([image[:,:,channel] for channel in channels.values()], axis = 2) # select the right channels
+
+        new_data.append({'image': new_image, 'semantics': original_data[i]['semantics'], 'image_name': original_data[i]['image_name']})
+
+    transform = A.Compose([
+                A.Resize(height = RESIZE, width = RESIZE)  # original images size:  (1024, 1024)
+                ])
+
+    def custom_collate(batch):
+        transformed = [transform(image=np.array(item['image']), mask = np.array(item['semantics'])) for item in batch]
+        images = [item['image'] for item in transformed]
+        masks = [item['mask'] for item in transformed]
+
+        
+        return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
+    
+    return DataLoader(new_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(new_data, replacement=False, num_samples=int(len(new_data)*percentage)))
+
 
 def data_loaders(split, percentage=1):
     ############# Init the Phenobench DataLoader #################
