@@ -11,6 +11,7 @@ from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
 from torchvision.models.segmentation import deeplabv3_resnet50
 from models import UNET
+from PIL import Image
 # DISUSED IMPORTS
 # import time
 # from dataset import get_batch_idx, custom_collate
@@ -35,6 +36,7 @@ VAL_PERCENTAGE = .25 # Should nominally be 1, but for testing purposes we can se
 SAVE_EVERY = 10
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
+SANDWICH_PATH = os.path.join("data", "sandwich_images")
 # calculate weights by processing dataset histogram balancing by class 
 LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
 
@@ -44,11 +46,24 @@ def main(model_name):
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
     # use GPU
     set_device()
-    train_loader, val_loader = data_loaders()
+    # train_loader = data_loaders("train", TRAIN_PERCENTAGE)
+    # val_loader = data_loaders("val", VAL_PERCENTAGE)
+    CHANNELS = { # comment out the channels you don't want to include
+        "R": 0,
+        "G": 1,
+        "B": 2,
+        # "ExG": 3,
+        # "ExR": 4,
+        "CIVE": 5,
+        # "NDI": 6,
+        "YOLO": 7
+    }
 
+    train_loader = feature_engineered_data_loaders("train", CHANNELS, TRAIN_PERCENTAGE)
+    val_loader = feature_engineered_data_loaders("val", CHANNELS, VAL_PERCENTAGE)
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
-    model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
+    model = UNET(in_channels = len(CHANNELS), out_channels=3).to(device=DEVICE)
     
     # model = deeplabv3_resnet50(weights=None).to(DEVICE)
     # model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
@@ -146,12 +161,39 @@ def set_device():
     print("DEVICE:", DEVICE)
     LOSS_WEIGHT = torch.tensor(LOSS_WEIGHT).to(DEVICE) # 3 is the number of classes for this task
 
-def data_loaders():
+
+
+def feature_engineered_data_loaders(split, channels, percentage=1):
+    original_data = PhenoBench(DATA_PATH, split = split, target_types=["semantics"])
+
+    new_data = []
+    for i in tqdm(range(len(original_data)), colour="yellow", desc=f"Loading {split} data"):
+
+        image = np.load(os.path.join(SANDWICH_PATH, split, original_data[i]['image_name'].split(".")[0] + ".npy"))
+        new_image = np.stack([image[:,:,channel] for channel in channels.values()], axis = 2) # select the right channels
+
+        new_data.append({'image': new_image, 'semantics': original_data[i]['semantics'], 'image_name': original_data[i]['image_name']})
+
+    transform = A.Compose([
+                A.Resize(height = RESIZE, width = RESIZE)  # original images size:  (1024, 1024)
+                ])
+
+    def custom_collate(batch):
+        transformed = [transform(image=np.array(item['image']), mask = np.array(item['semantics'])) for item in batch]
+        images = [item['image'] for item in transformed]
+        masks = [item['mask'] for item in transformed]
+
+        
+        return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
+    
+    return DataLoader(new_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(new_data, replacement=False, num_samples=int(len(new_data)*percentage)))
+
+
+def data_loaders(split, percentage=1):
     ############# Init the Phenobench DataLoader #################
     # Phenobench's DataLoader sits on top the directroy and only loads when .__getitem__ is called
     # ex: train_data[image_index]['image']
-    train_data = PhenoBench(DATA_PATH, split = "train", target_types=["semantics"])
-    val_data = PhenoBench(DATA_PATH, split = "val", target_types=["semantics"])
+    data = PhenoBench(DATA_PATH, split = split, target_types=["semantics"])
 
     ################ Data Augmentation ################
     # We resize so that our GPU's can handle the number of parameters 
@@ -176,10 +218,8 @@ def data_loaders():
         
         return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
 
-    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last = True, sampler=RandomSampler(train_data, replacement=False, num_samples=int(len(train_data)*TRAIN_PERCENTAGE)))
-    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(val_data, replacement=False, num_samples=int(len(val_data)*VAL_PERCENTAGE)))
+    return DataLoader(data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(data, replacement=False, num_samples=int(len(data)*percentage)))
 
-    return train_loader, val_loader
 
 def save_model(model, model_stats={}):
     model_path = os.path.join("models", model_stats["model_name"])
@@ -240,6 +280,28 @@ def load_and_evaluate(model_path):
 
     model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
     
+
+def load_and_make_submission(model_path):
+    set_device()
+    model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
+    model.eval()
+    test_loader = data_loaders("test")
+    # Save all images predicted from this model to png files in the submission directory
+    submission_path = os.path.join("submissions", model_path.split("/")[-2], "semantics")
+    if not os.path.exists(submission_path):
+        os.makedirs(submission_path)
+    # load an image
+    data = PhenoBench(os.path.join("data", "PhenoBench"), split = "test" , target_types=["semantics"])
+    for img_idx in range(len(data)):
+        img = data[img_idx]['image']
+        pred = model.predict(torch.tensor(np.transpose(np.array(img), (2,0,1))).float().unsqueeze(0).to(DEVICE)).cpu().numpy()[0]
+        #convert to ints
+        pred = pred.astype(np.uint8)
+        image_path = os.path.join(submission_path, data[img_idx]['image_name'])
+        # save prediciton as an image
+        Image.fromarray(pred).save(image_path)
+        print(f"Image {img_idx} saved to {image_path}")
+
 if __name__ == "__main__":
     if len(sys.argv) != 2:
         print("Usage: python train.py <model_name>")
