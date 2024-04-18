@@ -27,18 +27,18 @@ np.set_printoptions(formatter={'float_kind':'{:f}'.format})
 # TODO: Plotting Function(s)
 ############## Hyperparameters #################
 RESIZE = 1024
-BATCH_SIZE = 1 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
+BATCH_SIZE = 2 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
 EPOCHS = 100
 LR = .0001
 EVALUATE_IN_LOOP = True
 TRAIN_PERCENTAGE = 1 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
-VAL_PERCENTAGE = .25 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
-SAVE_EVERY = 10
+VAL_PERCENTAGE = 1 # Should nominally be 1, but for testing purposes we can set it to a fraction of the dataset
+SAVE_EVERY = 100
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
 SANDWICH_PATH = os.path.join("data", "sandwich_images")
 # calculate weights by processing dataset histogram balancing by class 
-LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABELS: {0:soil, 1:crop, 2: weed}
+LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))         # CLASS LABELS: {0:soil, 1:crop, 2: weed}
 
 
 def main(model_name):
@@ -46,8 +46,9 @@ def main(model_name):
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
     # use GPU
     set_device()
-    # train_loader = data_loaders("train", TRAIN_PERCENTAGE)
-    # val_loader = data_loaders("val", VAL_PERCENTAGE)
+    
+    EPOCHS = int(input("Enter the Epochs would you like to train: "))
+
     CHANNELS = { # comment out the channels you don't want to include
         "R": 0,
         "G": 1,
@@ -63,29 +64,24 @@ def main(model_name):
     val_loader = feature_engineered_data_loaders("val", CHANNELS, VAL_PERCENTAGE)
     ################# Init the Model #####################
     #layer = DoubleConv(in_channels=3, out_channels=64).to(DEVICE) # ensure that weights and data are both on GPU
-    model = UNET(in_channels = len(CHANNELS), out_channels=3).to(device=DEVICE)
-    
-    # model = deeplabv3_resnet50(weights=None).to(DEVICE)
-    # model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
-    model.to(DEVICE)
-    
-
-    ############## Load a Saved Model ####################
-    # model = models.resnet18()
-    # # Load the saved model state dictionary
-    # saved_model_path = 'saved_model.pth'
-    # saved_model_state_dict = torch.load(saved_model_path)
-    # # Load the saved model state dictionary into your model
-    # model.load_state_dict(saved_model_state_dict)
-    # model.to(DEVICE)
+    model = load_model(model_name, CHANNELS)
+    #model = UNET(in_channels = len(CHANNELS), out_channels=3).to(device=DEVICE)
+    subfolders = [f.name for f in os.scandir("models") if f.is_dir()]
+    if model_name in subfolders:
+        subfolder_path = os.path.join("models", model_name)
+        model_subfolders = [f.name for f in os.scandir(subfolder_path) if f.is_dir()]
+        highest_epoch_num_ix = np.argmax(np.array([int(model_sub_dir.split('_')[1]) for model_sub_dir in  model_subfolders]))
+        max_epoch = int(model_subfolders[highest_epoch_num_ix].split('_')[1]) + 1
+    else: 
+        max_epoch = 0
 
     # Creates a GradScaler once at the beginning of training.
     scaler = GradScaler() # automated mixed precision. Dynamically scale between float16 and float32 stability and computation increases during back prop
     
-    # Loss function. Why do we choose ot use CrossEntropy?
+    # Loss function. 
     loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
     
-    # Define the Adam optimizer. Why do we choose to use the Adam optimizer?
+    # Define the Adam optimizer.
     optimizer = optim.Adam(model.parameters(), lr = LR)
 
     ############### Train the Model ###############
@@ -130,13 +126,14 @@ def main(model_name):
             model_parameters = {
                         "model_name": model_name,
                         "batch_size": BATCH_SIZE,
-                        "epochs": i,
+                        "epochs": i + max_epoch,
                         "learning_rate": LR,
                         "loss_weight": LOSS_WEIGHT.tolist(),
                         "resize": RESIZE,
                         "device": DEVICE,
                         "mean_val_loss": mean_val_loss,
                         "mean_val_iou": mean_val_iou,
+                        "channels": CHANNELS
                     }
 
             save_model(model, model_parameters)
@@ -147,6 +144,18 @@ def main(model_name):
         # epoch_loss.append(batch_loss)
         # if flag:
         #     break
+
+def load_model(model_name, CHANNELS):
+    subfolders = [f.name for f in os.scandir("models") if f.is_dir()]
+    if model_name in subfolders:
+        subfolder_path = os.path.join("models", model_name)
+        model_subfolders = [f.name for f in os.scandir(subfolder_path) if f.is_dir()]
+        highest_epoch_num_ix = np.argmax(np.array([int(model_sub_dir.split('_')[1]) for model_sub_dir in model_subfolders]))
+        print(f'Retraining {model_name} at {model_subfolders[highest_epoch_num_ix]}')
+        return torch.load(os.path.join("models",model_name, model_subfolders[highest_epoch_num_ix], "model.pt"), map_location=torch.device(DEVICE)).to(DEVICE)
+
+    else:
+        return UNET(in_channels = len(CHANNELS), out_channels=3).to(device=DEVICE)
 
 
 
@@ -276,8 +285,6 @@ def load_and_evaluate(model_path):
     loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
     print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou} for model at {model_path}")
-
-
     model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
     
 
@@ -308,7 +315,10 @@ if __name__ == "__main__":
         sys.exit(1)
 
     if os.path.exists(os.path.join("models", sys.argv[1])):
-        print("Model name already exists. Please choose a different name.")
-        sys.exit(1)
-
-    main(sys.argv[1])
+        retrain = input("Model name already exists. Would you like to continue training? (Y/n): ")
+        if retrain.lower() == 'y':
+            main(sys.argv[1])
+        else:
+            sys.exit(1)
+    else: 
+        main(sys.argv[1])
