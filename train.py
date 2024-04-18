@@ -292,19 +292,39 @@ def load_and_make_submission(model_path):
     set_device()
     model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
     model.eval()
-    test_loader = data_loaders("test")
+
+    CHANNELS = { # comment out the channels you don't want to include
+        "R": 0,
+        "G": 1,
+        "B": 2,
+        # "ExG": 3,
+        # "ExR": 4,
+        "CIVE": 5,
+        # "NDI": 6,
+        "YOLO": 7
+    }
+
+    original_data = PhenoBench(DATA_PATH, split = "test")
+
+    new_data = []
+    for i in tqdm(range(len(original_data)), colour="yellow", desc=f"Loading test data"):
+
+        image = np.load(os.path.join(SANDWICH_PATH, "test", original_data[i]['image_name'].split(".")[0] + ".npy"))
+        new_image = np.stack([image[:,:,channel] for channel in CHANNELS.values()], axis = 2) # select the right channels
+
+        new_data.append({'image': new_image, 'image_name': original_data[i]['image_name']})
+
     # Save all images predicted from this model to png files in the submission directory
     submission_path = os.path.join("submissions", model_path.split("/")[-2], "semantics")
     if not os.path.exists(submission_path):
         os.makedirs(submission_path)
     # load an image
-    data = PhenoBench(os.path.join("data", "PhenoBench"), split = "test" , target_types=["semantics"])
-    for img_idx in range(len(data)):
-        img = data[img_idx]['image']
+    for img_idx in range(len(new_data)):
+        img = new_data[img_idx]['image']
         pred = model.predict(torch.tensor(np.transpose(np.array(img), (2,0,1))).float().unsqueeze(0).to(DEVICE)).cpu().numpy()[0]
         #convert to ints
         pred = pred.astype(np.uint8)
-        image_path = os.path.join(submission_path, data[img_idx]['image_name'])
+        image_path = os.path.join(submission_path, new_data[img_idx]['image_name'])
         # save prediciton as an image
         Image.fromarray(pred).save(image_path)
         print(f"Image {img_idx} saved to {image_path}")
