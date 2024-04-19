@@ -42,6 +42,15 @@ LOSS_WEIGHT = ((1/88.45), (1/11.03), (1/.5))                       # CLASS LABEL
 def main(model_name):
     # Activate my python environment for this task:                       C:\Users\menam\projects\phenobench\pheno_env\Scripts\activate
     # Install the most stable version of pytorch with GPU configuration:  https://pytorch.org/get-started/locally/
+<<<<<<< Updated upstream
+=======
+
+    ############## Hyperparameters #################
+    RESIZE = 1024
+    BATCH_SIZE = 2 # I hear you are supposed to use as much GPU as possible, but batch size affects the loss propagations. Look into this tradeoff 
+    EPOCHS = 100
+    LR = .0001
+>>>>>>> Stashed changes
     # use GPU
     set_device()
     train_loader, val_loader = data_loaders()
@@ -176,8 +185,123 @@ def data_loaders():
         
         return {'images': torch.tensor(np.transpose(np.array(images), (0,3,1,2))).float(), 'masks': torch.tensor(np.array(masks))}
 
+<<<<<<< Updated upstream
     train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last = True, sampler=RandomSampler(train_data, replacement=False, num_samples=int(len(train_data)*TRAIN_PERCENTAGE)))
     val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, collate_fn=custom_collate, drop_last=True, sampler=RandomSampler(val_data, replacement=False, num_samples=int(len(val_data)*VAL_PERCENTAGE)))
+=======
+    train_loader = DataLoader(train_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate, drop_last = True)
+    val_loader = DataLoader(val_data, batch_size=BATCH_SIZE, shuffle=True, collate_fn=custom_collate, drop_last = True)
+
+
+    ################# Init the Model #####################
+    model = UNET(in_channels = 3, out_channels=3).to(device=DEVICE)
+    
+    #model =deeplabv3_resnet50(weights=None).to(DEVICE)
+    #model.classifier[4] = nn.Conv2d(256, out_channels= 3, kernel_size=(1,1), stride = (1,1)) # previous model: Linear(in_features=2048, out_features=1000, bias=True)
+    #model.to(DEVICE)
+    
+
+    ############## Load a Saved Model ####################
+    # model = models.resnet18()
+    # # Load the saved model state dictionary
+    # saved_model_path = 'saved_model.pth'
+    # saved_model_state_dict = torch.load(saved_model_path)
+    # # Load the saved model state dictionary into your model
+    # model.load_state_dict(saved_model_state_dict)
+    # model.to(DEVICE)
+
+    # Creates a GradScaler once at the beginning of training.
+    scaler = GradScaler() # automated mixed precision. Dynamically scale between float16 and float32 stability and computation increases during back prop
+    
+    # Loss function. Why do we choose ot use CrossEntropy?
+    loss_func = nn.CrossEntropyLoss(weight = LOSS_WEIGHT) # will more epochs help or will more skewed weights help
+    
+    # Define the Adam optimizer. Why do we choose to use the Adam optimizer?
+    optimizer = optim.Adam(model.parameters(), lr = LR)
+
+    flag = False
+    ############### Train the Model ###############
+    eval_loss = []
+    epoch_evals = []
+    epoch_loss = []
+
+    for i in range(EPOCHS):
+        batch_loss = []
+        for batch in tqdm(train_loader): # # testing code: tqdm(islice(train_loader,8))  Training model:  tqdm(train_loader)
+            model.train()
+            optimizer.zero_grad()  # Zero the gradients, so we only back prop this batch not this batch and all of the batches before it
+
+            ############ Compute Loss for each Batch ###########
+            with autocast(): # context manager. AMP. Uses float16 and float32 when appropriate to decrease computations expense 
+                loss = loss_func(model(batch['images'].to(DEVICE)), batch['masks'].long().to(DEVICE))
+                #loss = loss_func(model(batch['images'].to(DEVICE))['out'], batch['masks'].long().to(DEVICE)) # pytroch.models.segmentation returns an OrderedDict with 'out' as the only key
+                loss = loss.requires_grad_()
+            batch_loss.append(loss.item())
+            ############ Backpropagate the Loss ##############
+            # if loss.item() == float('nan'):
+            #     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+            #     break
+            
+            scaler.scale(loss).backward()  # Compute gradients
+            scaler.step(optimizer) # Update parameters
+            scaler.update()
+
+        
+
+        print(f'Epoch {i} mean loss: {sum(batch_loss)/len(batch_loss)}')
+
+        if (i + 1) % 5 == 0: 
+            #mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+                
+            model_parameters = {
+                        "batch_size": BATCH_SIZE,
+                        "epochs": EPOCHS,
+                        "learning_rate": LR,
+                        "loss_weight": LOSS_WEIGHT.tolist(),
+                        "resize": RESIZE,
+                        "device": DEVICE,
+                        "mean_val_loss": 'NA',
+                        "mean_val_iou": 'NA'
+                    }
+
+                    
+            save_model(model, model_parameters)
+
+        ################## MODEL STATISTICS #############
+        # # convert batch loss into np array on the CPU
+        # batch_loss = torch.stack(batch_loss).detach().cpu().numpy()
+        # epoch_loss.append(batch_loss)
+        # if flag:
+        #     break
+        # ############### Evaluate on Validation ###########
+        # # I am unsure if we should be evaluating or applying the loss function
+        # # Evaluation easily shows the performance on all of the class, but I think generally people look at the validation loss
+        # # be careful to avoid overfitting on the validation set
+        # if evaluate_in_loop: 
+        #     mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+        #     print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou}")
+        # #np.savetxt('validation_prediction.txt', pred.reshape(-1, 1).detach().cpu().numpy())
+    
+    
+
+    if not evaluate_in_loop:
+        mean_val_loss, mean_val_iou = evaluate_validation(model, val_loader, DEVICE, loss_func)
+        print(f"Val Mean Loss: {mean_val_loss}, Validation IoU: {mean_val_iou}")
+
+    # TODO: We need to save the model, but I also think we should save the results and the hyperparameters by appending to a csv file: training_loss, val_loss, training_time, training_time per batch, IoU, etc
+    model_parameters = {
+        "batch_size": BATCH_SIZE,
+        "epochs": EPOCHS,
+        "learning_rate": LR,
+        "loss_weight": LOSS_WEIGHT.tolist(),
+        "resize": RESIZE,
+        "device": DEVICE,
+        "mean_val_loss": mean_val_loss,
+        "mean_val_iou": mean_val_iou.tolist()
+    }
+    
+    #save_model(model, model_parameters)
+>>>>>>> Stashed changes
 
     return train_loader, val_loader
 
@@ -214,6 +338,10 @@ def evaluate_validation(model, val_loader, DEVICE, loss_func):
             with autocast(): # context manager. AMP. 
                 # For cross entropy loss we pass the raw logits compared to the labels
                 logits = model(batch['images'].to(DEVICE)) 
+<<<<<<< Updated upstream
+=======
+                #logits = model(batch['images'].to(DEVICE))['out']
+>>>>>>> Stashed changes
 
                 # loss.item returns a python float, and without it we put a bunch of tensors on the GPU which takes up memory 
                 val_loss.append(loss_func(logits, batch['masks'].long().to(DEVICE)).item())

@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import torchvision.transforms.functional as TF
 
+
+
 class DoubleConv(nn.Module):
     def __init__(self, in_channels, out_channels):
         super(DoubleConv, self).__init__()
@@ -42,7 +44,7 @@ class UNET(nn.Module):
         
 
         self.final_conv = nn.Conv2d(features[0], out_channels, kernel_size = 1)
-        self.softmax = nn.Softmax(dim = 1 )
+        self.softmax = nn.Softmax(dim = 1)
 
     def forward(self, x):
         skip_connections = []
