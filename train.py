@@ -10,7 +10,7 @@ from tqdm import tqdm
 from torchmetrics.classification import MulticlassJaccardIndex
 import torch.optim as optim
 from torchvision.models.segmentation import deeplabv3_resnet50
-from models import UNET
+from models import UNET,UNET_CBAM
 from PIL import Image
 # DISUSED IMPORTS
 # import time
