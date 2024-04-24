@@ -3,12 +3,14 @@ import torch
 import torch.nn as nn
 import os
 import matplotlib.pyplot as plt
-from train import data_loaders
+# from train import data_loaders
 from phenobench import PhenoBench
 import numpy as np
 from tqdm import tqdm
 from torch.cuda.amp import autocast, GradScaler
 from mpl_toolkits.axes_grid1 import make_axes_locatable
+# from models import UNET, UNET_CBAM
+# from train import feature_engineered_data_loaders
 
 plt.rcParams["keymap.quit"] = ['ctrl+w', 'cmd+w', 'q']
 
@@ -154,48 +156,78 @@ def activation_map(cnn_layers, layer_name, feature_map_idx, model, DEVICE, steps
 
 # grad-cam
 
-if __name__ == "__main__":
+def show_model_preds(model_names, img_idx, split = 'val', data_path = '', sandwich_path = '', device = ''):
+    data = PhenoBench(data_path, split = "val", target_types = ["semantics"])
+    image = data[img_idx]['image']
+
+    fig, axs = plt.subplots(1, len(model_names) + 1, figsize=(20, 10))
+    axs[0].imshow(image)
+
+    img = torch.tensor(np.transpose(np.array(image), (2,0,1))).float().unsqueeze(0).to(device)
+
     
+    for i, model_name in enumerate(model_names):
+        print(model_name)
+        if model_name == 'UNET_CIVE_YOLO':
+            image = np.load(os.path.join(sandwich_path, split, data[img_idx]['image_name'].split(".")[0] + ".npy"))
+
+            channels = { "R": 0,"G": 1,"B": 2,"CIVE": 5,"YOLO": 7}
+
+            img = np.stack([image[:,:,channel] for channel in channels.values()], axis = 2) # select the right channels
+            img = torch.tensor(np.transpose(img, (2,0,1))).float().unsqueeze(0).to(device)
+        model_path = os.path.join('models',str(model_name), 'epoch_0099', 'model.pt')
+        model = torch.load(model_path, map_location=torch.device(DEVICE))
+
+        axs[i + 1].imshow(model.predict(img).squeeze(0).cpu())
+    
+
+    plt.show(block = False)
+
+if __name__ == "__main__":
+    SANDWICH_PATH = os.path.join("data", "sandwich_images")
+
     DATA_PATH = os.path.join("data", "PhenoBench") # OS independent path
     DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
     
 
     #train_loader, val_loader = data_loaders()
-    model_id = 5265
-    model_path = os.path.join('models', str(model_id), 'model.pt')
-    # load the model onto device
-    model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
+    # model_id = 5265
+    # model_path = os.path.join('models', str(model_id), 'epoch_0099', 'model.pt')
+    # # load the model onto device
+    # model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
 
     # load an image
-    train_data = PhenoBench(DATA_PATH, split = "train", target_types=["semantics"])
     
+   
+    
+
+    show_model_preds(['5265', 'UNET_CBAM', 'UNET_CIVE_YOLO'], 15, split = 'val', data_path = DATA_PATH, device = DEVICE, sandwich_path= SANDWICH_PATH )
+
     # recursively search for convolution layers in the model
+    # cnn_layers = {}
+    # cnn_layers['downs'] = find_conv_layers(model.downs)
+    # cnn_layers['bottleneck'] = find_conv_layers(model.bottleneck)
+    # cnn_layers['ups'] = find_conv_layers(model.ups)
+    # cnn_layers['final_conv'] = [model.final_conv]
     
-
-    cnn_layers = {}
-    cnn_layers['downs'] = find_conv_layers(model.downs)
-    cnn_layers['bottleneck'] = find_conv_layers(model.bottleneck)
-    cnn_layers['ups'] = find_conv_layers(model.ups)
-    cnn_layers['final_conv'] = [model.final_conv]
-    
-    img_idx = 15
-    img = train_data[img_idx]['image']
-    mask = train_data[img_idx]['semantics']
+    # img_idx = 15
+    # img = data[img_idx]['image']
+    # mask = data[img_idx]['semantics']
    
    
-    fig, axs = plt.subplots(1, 2, figsize=(10, 5))
+    # fig, axs = plt.subplots(1, 4, figsize=(10, 5))
        
-    axs[0].imshow(img)
-    axs[1].imshow(mask)
-    #img.show()
+    # axs[0].imshow(img)
+    # axs[1].imshow(mask)
+    # #img.show()
     
-    plt.show(block = False)
+    # plt.show(block = False)
 
 
-    output = feature_maps(img, cnn_layers, 'ups', 7, model, DEVICE,rows = 3, cols = 3, channel_shift= 0)
+    # output = feature_maps(img, cnn_layers, 'ups', 7, model, DEVICE,rows = 3, cols = 3, channel_shift= 0)
     #activation_map(cnn_layers, 'downs', 4, model, DEVICE, 50, .1)
 
-    
+    stop = str(input('press enter to kill: '))
 
 
 
