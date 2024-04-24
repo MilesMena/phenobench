@@ -152,36 +152,49 @@ def activation_map(cnn_layers, layer_name, feature_map_idx, model, DEVICE, steps
     
 # integrated gradients - measure the importance of each input feature (pixel value)
 
+
 # saliency maps - highlight regions of an input image that are the most important
 
 # grad-cam
 
-def show_model_preds(model_names, img_idx, split = 'val', data_path = '', sandwich_path = '', device = ''):
+def show_model_preds(model_names, img_idices, split = 'val', data_path = '', sandwich_path = '', device = ''):
     data = PhenoBench(data_path, split = "val", target_types = ["semantics"])
-    image = data[img_idx]['image']
-
-    fig, axs = plt.subplots(1, len(model_names) + 1, figsize=(20, 10))
-    axs[0].imshow(image)
-
-    img = torch.tensor(np.transpose(np.array(image), (2,0,1))).float().unsqueeze(0).to(device)
-
     
-    for i, model_name in enumerate(model_names):
-        print(model_name)
-        if model_name == 'UNET_CIVE_YOLO':
-            image = np.load(os.path.join(sandwich_path, split, data[img_idx]['image_name'].split(".")[0] + ".npy"))
+    #fig, axs = plt.subplots(len(img_idices), len(model_names) + 1, figsize=(10, 10),squeeze= True, sharex=True, sharey=True)
 
-            channels = { "R": 0,"G": 1,"B": 2,"CIVE": 5,"YOLO": 7}
-
-            img = np.stack([image[:,:,channel] for channel in channels.values()], axis = 2) # select the right channels
-            img = torch.tensor(np.transpose(img, (2,0,1))).float().unsqueeze(0).to(device)
-        model_path = os.path.join('models',str(model_name), 'epoch_0099', 'model.pt')
-        model = torch.load(model_path, map_location=torch.device(DEVICE))
-
-        axs[i + 1].imshow(model.predict(img).squeeze(0).cpu())
+    fig = plt.figure(figsize=(10, 7))
+    gs = fig.add_gridspec(len(img_idices), len(model_names) + 1, hspace=.1, wspace=.1)
+    axs = gs.subplots(sharex='col', sharey='row')
     
+    for i, img_idx in enumerate(img_idices):
+        image = data[img_idx]['image']
+        mask = data[img_idx]['semantics']
+        axs[i, 0].imshow(mask)
+        
 
+        img = torch.tensor(np.transpose(np.array(image), (2,0,1))).float().unsqueeze(0).to(device)
+
+        
+        for j, model_name in enumerate(model_names):
+            print(img_idx, model_name)
+            if model_name == 'UNET_CIVE_YOLO':
+                image = np.load(os.path.join(sandwich_path, split, data[img_idx]['image_name'].split(".")[0] + ".npy"))
+
+                channels = { "R": 0,"G": 1,"B": 2,"CIVE": 5,"YOLO": 7}
+
+                img = np.stack([image[:,:,channel] for channel in channels.values()], axis = 2) # select the right channels
+                img = torch.tensor(np.transpose(img, (2,0,1))).float().unsqueeze(0).to(device)
+            model_path = os.path.join('models',str(model_name), 'epoch_0099', 'model.pt')
+            model = torch.load(model_path, map_location=torch.device(DEVICE))
+
+            pred = np.array(model.predict(img).squeeze(0).cpu())
+            axs[i, j + 1].imshow(pred)
+
+            if i == 0:
+                axs[i,j + 1].set_title(model_name)
+    axs[0,0].set_title('Ground Truth')
     plt.show(block = False)
+    #plt.show(block = False)
 
 if __name__ == "__main__":
     SANDWICH_PATH = os.path.join("data", "sandwich_images")
@@ -196,12 +209,13 @@ if __name__ == "__main__":
     # # load the model onto device
     # model = torch.load(model_path, map_location=torch.device(DEVICE)).to(DEVICE)
 
+
     # load an image
     
    
     
 
-    show_model_preds(['5265', 'UNET_CBAM', 'UNET_CIVE_YOLO'], 15, split = 'val', data_path = DATA_PATH, device = DEVICE, sandwich_path= SANDWICH_PATH )
+    show_model_preds(['UNET', 'UNET_CBAM', 'UNET_CIVE_YOLO'], [12,27,80], split = 'val', data_path = DATA_PATH, device = DEVICE, sandwich_path= SANDWICH_PATH )
 
     # recursively search for convolution layers in the model
     # cnn_layers = {}
